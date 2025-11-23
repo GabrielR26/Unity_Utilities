@@ -2,32 +2,49 @@
 using UnityEngine;
 
 /// <summary>
-/// Hide a variable with field condition (valid type : bool, string, int, float, enum)
-/// Inverse : if true, hide the variable with inverse field condition
+/// Hide a variable by boolean expression
 /// </summary>
 public class HideConditionAttribute : PropertyAttribute
 {
 	public string booleanExpression = string.Empty;
 
-	public HideConditionAttribute(string _conditionField)
+	public HideConditionAttribute(string _conditionField, bool _isCollection = false) : base(_isCollection)
 	{
 		booleanExpression = _conditionField;
 	}
 }
 
 /// <summary>
-/// Allow edition of a property by boolean expression.
-/// Allowed expression format : A {&&, ||, ^, !, ==, !=, <, <=, >, =>} B {+, -, *, /} C {(, )} 
-///	Allowed variable format : A, B, C == {0, 0.0, 0.0[fF]} {abc0, abc0.abc0}
+/// Allow edition of a property by boolean expression
 /// </summary>
 public class EditConditionAttribute : PropertyAttribute
 {
 	public string booleanExpression = "";
 
-	public EditConditionAttribute(string _conditionField)
+	public EditConditionAttribute(string _conditionField) : base(true)
 	{
 		booleanExpression = _conditionField;
 	}
+}
+
+public class FixedListAttribute : PropertyAttribute
+{
+	public int size = 0;
+
+	public FixedListAttribute(int _size) 
+	{ 
+		size = _size; 
+	}
+}
+
+public class PrefabWithComponentAttribute : PropertyAttribute
+{
+    public System.Type RequiredComponentType;
+
+    public PrefabWithComponentAttribute(System.Type componentType)
+    {
+        RequiredComponentType = componentType;
+    }
 }
 
 #region Math

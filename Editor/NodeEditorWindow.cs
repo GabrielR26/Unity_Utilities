@@ -1,15 +1,15 @@
 
+using System;
+using System.Collections.Generic;
 using UnityEditor;
 using UnityEngine;
-using System.Collections.Generic;
-using System;
 
 public abstract class NodeEditorWindow : EditorWindow
 {
 	Vector2 offset = Vector2.zero;
-	Vector2 drag = Vector2.zero;
 	float zoom = 1f;
 	protected List<Node> nodes = new();
+	protected Node currentNode = null;
 	protected List<NodeConnection> connections = new();
 
 	void OnEnable()
@@ -19,12 +19,12 @@ public abstract class NodeEditorWindow : EditorWindow
 
 	void OnGUI()
 	{
-		DrawGrid(20, 0.1f, Color.grey);
-		DrawGrid(100, 0.2f, Color.grey);
-		DrawUtilities();
+		DrawGrid(20, 0.05f, Color.grey);
+		DrawGrid(100, 0.15f, Color.grey);
 
 		DrawNodes();
 		DrawConnections();
+		DrawUtilities();
 
 		HandleNodeEvents(Event.current);
 		HandleEvents(Event.current);
@@ -59,101 +59,149 @@ public abstract class NodeEditorWindow : EditorWindow
 		Handles.EndGUI();
 	}
 
-	protected virtual void DrawUtilities()
+	void DrawUtilities()
 	{
 		GUILayout.Label($"Zoom : {zoom:0.00}");
+		GUILayout.Label($"Offset : {offset}");
+		GUILayout.Label($"Mouse : {Event.current.mousePosition}");
+
+		Handles.color = Color.red;
+		Handles.DrawSolidDisc(Event.current.mousePosition, Vector3.forward, 3);
+		Handles.color = Color.white;
 	}
 
 	void DrawNodes()
 	{
-		if (nodes.Count == 0)
-			return;
 		for (int i = 0; i < nodes.Count; i++)
 			nodes[i].Draw(offset, zoom);
 	}
 
 	void DrawConnections()
 	{
-		if (connections.Count == 0)
-			return;
 		for (int i = 0; i < connections.Count; i++)
 			connections[i].Draw(offset, zoom);
 	}
 
-	void HandleEvents(Event _e)
+	void HandleNodeEvents(Event _event)
 	{
-		drag = Vector2.zero;
+		for (int i = nodes.Count - 1; i >= 0; i--) // Reverse loop for overlapping nodes
+		{
+			nodes[i].HandleEvents(_event);
+			//if (_guiChanged)
+			//	GUI.changed = true;
+		}
+	}
 
-		switch (_e.type)
+	void HandleEvents(Event _event)
+	{
+		Vector2 _drag = Vector2.zero;
+
+		switch (_event.type)
 		{
 			case EventType.ContextClick:
-				ShowContextMenu(_e.mousePosition);
-				GUI.changed = true; // == Repaint
+				ShowWindowContextMenu(_event.mousePosition);
+				_event.Use();
 				break;
 
 			case EventType.MouseDrag:
-				if (_e.button == 0 || _e.button == 2)
+				if (_event.button == 0 || _event.button == 2)
 				{
-					drag = _e.delta;
-					offset += drag;
-					_e.Use();
+					_drag = _event.delta;
+					offset += _drag;
+					_event.Use();
 				}
 				break;
 
 			case EventType.ScrollWheel:
 				float _oldZoom = zoom;
-				zoom = Mathf.Clamp(zoom - (_e.delta.y * 0.02f), 0.1f, 2.2f);
+				zoom = Mathf.Clamp(zoom - (_event.delta.y * 0.02f), 0.1f, 2.2f);
 
-				Vector2 _mousePos = _e.mousePosition;
+				Vector2 _mousePos = _event.mousePosition;
 				Vector2 _deltaPos = _mousePos - offset;
 				offset += _deltaPos - _deltaPos * (zoom / _oldZoom);
 
-				_e.Use();
+				_event.Use();
+				break;
+
+			case EventType.KeyDown:
+				if (_event.keyCode == KeyCode.Delete && currentNode != null)
+				{
+					NodeDeleted(currentNode);
+				}
+				_event.Use();
 				break;
 		}
 	}
 
-	void HandleNodeEvents(Event _e)
-	{
-		if (nodes.Count == 0)
-			return;
-		for (int i = nodes.Count - 1; i >= 0; i--)
-		{
-			bool _guiChanged = nodes[i].ProcessEvents(_e);
-			if (_guiChanged)
-				GUI.changed = true;
-		}
-	}
-
-	void ShowContextMenu(Vector2 _mousePosition)
+	void ShowWindowContextMenu(Vector2 _mousePosition)
 	{
 		GenericMenu _menu = new GenericMenu();
-		_menu.AddItem(new GUIContent("Add Node"), false, () => AddNode(EditoWindowUtils.ScreenToWindowPosition(_mousePosition, offset, zoom)));
+		_menu.AddItem(new GUIContent("Reset"), false, () => ResetWindow());
+		_menu.AddItem(new GUIContent("Add Node"), false, () => AddNode(NodeEditorWindowHelper.ScreenToWindowPosition(_mousePosition, offset, zoom)));
 		_menu.ShowAsContext();
 	}
 
 	void AddNode(Vector2 _position)
 	{
-		nodes.Add(new Node(_position, 200, 100, "Node"));
+		Node _node = new Node(_position, 200, 100, $"Node {nodes.Count}");
+		nodes.Add(_node);
+		_node.OnDeleted += NodeDeleted;
+		_node.OnSelected += NodeSelected;
+	}
+
+	void NodeDeleted(Node _node)
+	{
+		string _title = "Delete selected node ?";
+		string _message = $"{titleContent} : {_node.Title} \n\nYou cannot undo the delete node action.";
+		if (EditorUtility.DisplayDialog(_title, _message, "Delete", "Cancel"))
+		{
+			if (currentNode == _node)
+				currentNode = null;
+			nodes.Remove(_node);
+		}
+	}
+
+	void NodeSelected(Node _node)
+	{
+		if (currentNode == _node)
+			return;
+
+		if (currentNode != null)
+			currentNode.IsSelected = false;
+		currentNode = _node;
+		currentNode.IsSelected = true;
+	}
+
+	void ResetWindow()
+	{
+		zoom = 1;
+		offset = Vector2.zero;
 	}
 }
 
 
 public class Node
 {
-	public Rect rect;
-	public string title;
-	Vector2 offset;
-	float zoom;
-	bool isDragged;
-	bool isSelected;
+	public event Action<Node> OnDeleted;
+	public event Action<Node> OnSelected;
 
+	public Rect rect = Rect.zero;
+	public string title = string.Empty;
+	Vector2 offset = Vector2.zero;
+	float zoom = 0f;
+	bool isNodeDragged = false;
+	bool isPinDragged = false;
+	bool isSelected = false;
+	List<NodePin> pins = new();
+
+	public string Title => title;
 	public bool IsSelected { get { return isSelected; } set { isSelected = value; } }
 
 	public Node(Vector2 _position, float _width, float _height, string _title)
 	{
 		rect = new Rect(_position.x, _position.y, _width, _height);
 		title = _title;
+		pins.Add(new NodePin());
 	}
 
 	public void Drag(Vector2 _delta)
@@ -182,37 +230,76 @@ public class Node
 			GUI.Box(_zoomedRect, title, EditorStyles.helpBox);
 		}
 
-		Vector3 _pos = _zoomedRect.center;
-		Handles.DrawSolidDisc(_pos, new Vector3(5, 5, 100), 15);
+		for (int i = 0; i < pins.Count; i++)
+		{
+			NodePin _pin = pins[i];
+			_pin.Draw(_zoomedRect.center, _zoom);
+		}
 	}
 
-	public bool ProcessEvents(Event _e)
+	public void HandleEvents(Event _event)
 	{
-		switch (_e.type)
+		Vector2 _mousePos = NodeEditorWindowHelper.ScreenToWindowPosition(_event.mousePosition, offset, zoom);
+
+		switch (_event.type)
 		{
 			case EventType.MouseDown:
-				if (_e.button == 0 && rect.Contains(EditoWindowUtils.ScreenToWindowPosition(_e.mousePosition, offset, zoom)))
+				// Left click in node bonds
+				if (_event.button == 0)
 				{
-					isDragged = true;
-					GUI.changed = true;
+					for (int i = 0; i < pins.Count; i++)
+					{
+						NodePin _pin = pins[i];
+						Debug.Log($"{_pin.Rect.position}, {_pin.Rect.xMin} - {_pin.Rect.xMax}");
+						if (_pin.Rect.Contains(_event.mousePosition))
+						{	
+							isPinDragged = true;
+							_event.Use();
+						}
+					}
+					if (rect.Contains(_mousePos))
+					{
+						OnSelected?.Invoke(this);
+						isNodeDragged = true;
+						_event.Use();
+					}
+					else
+						isNodeDragged = false;
+				}
+				break;
+
+			case EventType.ContextClick:
+				if (rect.Contains(_mousePos))
+				{
+					ShowNodeContextMenu();
+					_event.Use();
 				}
 				break;
 
 			case EventType.MouseUp:
-				isDragged = false;
+				isNodeDragged = false;
 				break;
 
 			case EventType.MouseDrag:
-				if (_e.button == 0 && isDragged)
+				if (isNodeDragged)
 				{
-					Drag(_e.delta);
-					_e.Use();
-					return true;
+					Drag(_event.delta);
+					_event.Use();
 				}
 				break;
 		}
+	}
 
-		return false;
+	void ShowNodeContextMenu()
+	{
+		GenericMenu _menu = new GenericMenu();
+		_menu.AddItem(new GUIContent("Delete"), false, () => DeleteNode());
+		_menu.ShowAsContext();
+	}
+
+	void DeleteNode()
+	{
+		OnDeleted?.Invoke(this);
 	}
 }
 
@@ -245,21 +332,21 @@ public class NodeConnection
 			return;
 		}
 
-		Vector2 _mousePos = EditoWindowUtils.ScreenToWindowPosition(Event.current.mousePosition, offset, zoom);
-		Vector2 _start = startPin != null ? startPin.Center : _mousePos;
-		Vector2 _end = endPin != null ? endPin.Center : _mousePos;
-		Vector2 _dir = (_end - _start).normalized;
-		float _dist = Vector2.Distance(_start, _end) * 0.5f;
-		Vector2 _startTangent = _start + _dist * _dir;
-		Vector2 _endTangent = _end + _dist * -_dir;
+		Vector2 _mousePos = NodeEditorWindowHelper.ScreenToWindowPosition(Event.current.mousePosition, offset, zoom);
+		//Vector2 _start = startPin != null ? startPin.Center : _mousePos;
+		//Vector2 _end = endPin != null ? endPin.Center : _mousePos;
+		//Vector2 _dir = (_end - _start).normalized;
+		//float _dist = Vector2.Distance(_start, _end) * 0.5f;
+		//Vector2 _startTangent = _start + _dist * _dir;
+		//Vector2 _endTangent = _end + _dist * -_dir;
 
-		float _bezierWidth = 3f;
-		isHovered = ConnectionIsHovered(_mousePos, _start, _end, _dist, _startTangent, _endTangent, _bezierWidth);
-		_bezierWidth = isHovered ? _bezierWidth * 2 : _bezierWidth;
+		//float _bezierWidth = 3f;
+		//isHovered = ConnectionIsHovered(_mousePos, _start, _end, _dist, _startTangent, _endTangent, _bezierWidth);
+		//_bezierWidth = isHovered ? _bezierWidth * 2 : _bezierWidth;
 
-		Handles.BeginGUI();
-		Handles.DrawBezier(_start, _end, _startTangent, _endTangent, Color.cyan, null, _bezierWidth);
-		Handles.EndGUI();
+		//Handles.BeginGUI();
+		//Handles.DrawBezier(_start, _end, _startTangent, _endTangent, Color.cyan, null, _bezierWidth);
+		//Handles.EndGUI();
 	}
 
 	bool ConnectionIsHovered(Vector2 _mousePos, Vector2 _start, Vector2 _end, float _dist, Vector2 _startTangent, Vector2 _endTangent, float _bezierWidth)
@@ -285,7 +372,7 @@ public class NodeConnection
 					onDestroy?.Invoke();
 				}
 				// Dans EditorWindow
-				//if (_e.button == 0 && startPin.Rect.Contains(EditoWindowUtils.ScreenToWindowPosition(_e.mousePosition, offset, zoom)) && !inDragging) // Drag from pin
+				//if (_e.button == 0 && startPin.Rect.Contains(NodeEditorWindowHelper.ScreenToWindowPosition(_e.mousePosition, offset, zoom)) && !inDragging) // Drag from pin
 				//{
 				//	startPin = null;
 				//	inDragging = true;
@@ -298,51 +385,34 @@ public class NodeConnection
 
 public class NodePin
 {
-	Rect rect;
-	NodeConnection connection;
-	Texture2D circleTex;
-	bool inputPin;
+	Rect rect = Rect.zero;
+	Vector2 size = Vector2.zero;
+	NodeConnection connection = null;
+	float radius = 0f;
+	bool inputPin = false;
 
-	public Vector2 Center => rect.center;
 	public Rect Rect => rect;
 	public NodeConnection Connection { get { return connection; } set { value = connection; } }
 
-
-	public NodePin(Vector2 _pos, bool _inputPin = true)
+	public NodePin(bool _inputPin = true, float _radius = 10f)
 	{
-		rect = new Rect(_pos, Vector2.one * 10);
+		radius = _radius;
+		size = Vector2.one * radius * 2f;
 		inputPin = _inputPin;
-		SetCircleTexture();
 	}
 
-	void SetCircleTexture()
+	public void Draw(Vector2 _position, float _zoom)
 	{
-		if (circleTex == null)
-		{
-			circleTex = EditorGUIUtility.Load("builtin skins/darkskin/images/Knob.psd") as Texture2D;
+		rect.size = size * _zoom;
+		rect.position = new Vector2(_position.x - size.x, _position.y - size.y);
 
-			if (circleTex == null)
-			{
-				circleTex = new Texture2D(1, 1);
-				circleTex.SetPixel(0, 0, Color.white);
-				circleTex.Apply();
-			}
-		}
-		return;
+		Handles.DrawSolidDisc(_position, Vector3.forward, radius * _zoom);
 	}
 }
 
 public class NodeField
 {
 	Rect rect;
-}
-
-public static class EditoWindowUtils
-{
-	public static Vector2 ScreenToWindowPosition(Vector2 _screen, Vector2 _offset, float _zoom)
-	{
-		return (_screen - _offset) / _zoom;
-	}
 }
 
 // TODO NODE-EDITOR : UPDATE

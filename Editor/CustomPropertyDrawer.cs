@@ -2,7 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.Globalization;
-using System.Linq;
+using System.Reflection;
 using System.Text.RegularExpressions;
 using UnityEditor;
 using UnityEngine;
@@ -43,6 +43,7 @@ public class SerializableDictionaryDrawer : PropertyDrawer
 		{
 			foldoutExpand = !foldoutExpand;
 		}
+		//EditorGUI.Foldout();
 
 		// Property field name
 		Rect _labelRect = new(_foldoutRect.xMax, _position.y, _position.width - (minButtonWidth * 1.5f), lineHeight);
@@ -317,6 +318,221 @@ public class RangeBetweenDrawer : PropertyDrawer
 [CustomPropertyDrawer(typeof(HideConditionAttribute))]
 public class HideConditionDrawer : PropertyDrawer
 {
+	Rect position;
+	SerializedProperty property;
+	GUIContent label;
+	List<object> stepsResult;
+	bool canHide = false;
+	string booleanExpression;
+
+	public override void OnGUI(Rect _position, SerializedProperty _property, GUIContent _label)
+	{
+		HideConditionAttribute _hideCondition = (HideConditionAttribute)attribute;
+
+		// Expression changed
+		if (booleanExpression != _hideCondition.booleanExpression)
+		{
+			// Reset properties
+			position = _position;
+			property = _property;
+			label = _label;
+			stepsResult = new();
+
+			// Check expression
+			try
+			{
+				List<string> _stepsExpression = BooleanExpressionParser.ParseBooleanExpression(_hideCondition.booleanExpression);
+				for (int i = 0; i < _stepsExpression.Count; i++)
+				{
+					string _step = _stepsExpression[i];
+
+					if (BooleanExpressionParser.BooleanOperatorRegex.IsMatch(_step)) // Boolean expression
+					{
+						string[] _splitedOperation = BooleanExpressionParser.BooleanOperatorRegex.Split(_step);
+						// Always 3 item : 0{Left} 1{Operator} 2{Right}
+						string _leftOperand = _splitedOperation[0]; // Can be null
+						string _operator = _splitedOperation[1];
+						string _rightOperand = _splitedOperation[2];
+
+						// Boolean operator
+						BooleanOperator _booleanOperator = FieldOperationHelper.GetBooleanOperator(_operator);
+						if (_booleanOperator == BooleanOperator.None)
+						{
+							string _error = $"Failed to get boolean operator '{_operator}' for EditCondition of property field '{property.name}'";
+							EditorGUI.LabelField(position, label.text, $"{_error}");
+							Debug.LogError(_error);
+							return;
+						}
+
+						// Left/Right operand
+						object _leftResult = null;
+						if (!string.IsNullOrWhiteSpace(_leftOperand))
+							_leftResult = FieldOperationHelper.GetOperandValue(property, stepsResult, _leftOperand);
+						object _rightResult = FieldOperationHelper.GetOperandValue(property, stepsResult, _rightOperand);
+
+						bool _booleanExpressionResult = FieldOperationHelper.BooleanExpressionResult(_booleanOperator, _leftResult, _rightResult);
+						//DebugLog.Log("TEST", $"(Boolean) {_step} : Left: '{_leftResult}'; Right: '{_rightResult}' = {_booleanExpressionResult}");
+						stepsResult.Add(_booleanExpressionResult);
+					}
+					else // Arithmetic expression
+					{
+						MatchCollection _matches = BooleanExpressionParser.ArithmeticOperandRegex.Matches(_step);
+						// Always 3 item : 0{Left} 1{Operator} 2{Right}
+						string _leftOperand = _matches[0].Value;
+						string _operator = _matches[1].Value;
+						string _rightOperand = _matches[2].Value;
+
+						// Arithmetic operator
+						ArithmeticOperator _ArithmeticOperator = FieldOperationHelper.GetArithmeticOperator(_operator);
+						if (_ArithmeticOperator == ArithmeticOperator.None)
+						{
+							string _error = $"Failed to get Arithmetic operator '{_operator}' for EditCondition of property field '{property.name}'";
+							EditorGUI.LabelField(position, label.text, $"{_error}");
+							Debug.LogError(_error);
+							return;
+						}
+
+						// Left/Right operand
+						object _leftResult = FieldOperationHelper.GetOperandValue(property, stepsResult, _leftOperand);
+						object _rightResult = FieldOperationHelper.GetOperandValue(property, stepsResult, _rightOperand);
+
+						double _ArithmeticExpressionResult = FieldOperationHelper.ArithmeticExpressionResult(_ArithmeticOperator, _leftResult, _rightResult);
+						//DebugLog.Log("TEST", $"(Arithmetic) {_step} : Left: '{_leftResult}'; Right: '{_rightResult}' = {_ArithmeticExpressionResult}");
+						stepsResult.Add(_ArithmeticExpressionResult);
+					}
+				}
+			}
+			catch (Exception _exception)
+			{
+				canHide = false;
+				string _error = $"'HideCondition' attribute is invalid";
+				EditorGUI.LabelField(position, label.text, _error);
+				Debug.LogError(_exception);
+				return;
+			}
+		}
+
+		// Get final result
+		canHide = (bool)stepsResult[stepsResult.Count - 1];
+		if (!canHide)
+			EditorGUI.PropertyField(position, property, label, true);
+
+		//EditorGUI.PropertyVisibility.OnlyVisible
+	}
+
+	//public override float GetPropertyHeight(SerializedProperty _property, GUIContent _label)
+	//{
+	//	// Reduce property's height if hidden
+	//	float _propertyHeight = EditorGUI.GetPropertyHeight(_property, _label, true);
+	//	return canHide ? 0 : _propertyHeight;
+	//}
+}
+
+[CustomPropertyDrawer(typeof(EditConditionAttribute))]
+public class EditConditionDrawer : PropertyDrawer
+{
+	Rect position;
+	SerializedProperty property;
+	GUIContent label;
+	List<object> stepsResult;
+	string booleanExpression;
+
+	public override void OnGUI(Rect _position, SerializedProperty _property, GUIContent _label)
+	{
+		EditConditionAttribute _editCondition = (EditConditionAttribute)attribute;
+
+		// Expression changed
+		if (booleanExpression != _editCondition.booleanExpression)
+		{
+			// Reset properties
+			position = _position;
+			property = _property;
+			label = _label;
+			stepsResult = new();
+			booleanExpression = _editCondition.booleanExpression;
+
+			// Check expression
+			try
+			{
+				List<string> _stepsExpression = BooleanExpressionParser.ParseBooleanExpression(_editCondition.booleanExpression);
+				for (int i = 0; i < _stepsExpression.Count; i++)
+				{
+					string _step = _stepsExpression[i];
+
+					if (BooleanExpressionParser.BooleanOperatorRegex.IsMatch(_step)) // Boolean expression
+					{
+						string[] _splitedOperation = BooleanExpressionParser.BooleanOperatorRegex.Split(_step);
+						// Always 3 item : 0{Left} 1{Operator} 2{Right}
+						string _leftOperand = _splitedOperation[0]; // Can be null
+						string _operator = _splitedOperation[1];
+						string _rightOperand = _splitedOperation[2];
+
+						// Boolean operator
+						BooleanOperator _booleanOperator = FieldOperationHelper.GetBooleanOperator(_operator);
+						if (_booleanOperator == BooleanOperator.None)
+						{
+							string _error = $"Failed to get boolean operator '{_operator}' for EditCondition of property field '{property.name}'";
+							EditorGUI.LabelField(position, label.text, $"{_error}");
+							Debug.LogError(_error);
+							return;
+						}
+
+						// Left/Right operand
+						object _leftResult = null;
+						if (!string.IsNullOrWhiteSpace(_leftOperand))
+							_leftResult = FieldOperationHelper.GetOperandValue(property, stepsResult, _leftOperand);
+						object _rightResult = FieldOperationHelper.GetOperandValue(property, stepsResult, _rightOperand);
+
+						bool _booleanExpressionResult = FieldOperationHelper.BooleanExpressionResult(_booleanOperator, _leftResult, _rightResult);
+						stepsResult.Add(_booleanExpressionResult);
+					}
+					else // Arithmetic expression
+					{
+						MatchCollection _matches = BooleanExpressionParser.ArithmeticOperandRegex.Matches(_step);
+						// Always 3 item : 0{Left} 1{Operator} 2{Right}
+						string _leftOperand = _matches[0].Value;
+						string _operator = _matches[1].Value;
+						string _rightOperand = _matches[2].Value;
+
+						// Arithmetic operator
+						ArithmeticOperator _ArithmeticOperator = FieldOperationHelper.GetArithmeticOperator(_operator);
+						if (_ArithmeticOperator == ArithmeticOperator.None)
+						{
+							string _error = $"Failed to get Arithmetic operator '{_operator}' for EditCondition of property field '{property.name}'";
+							EditorGUI.LabelField(position, label.text, $"{_error}");
+							Debug.LogError(_error);
+							return;
+						}
+
+						// Left/Right operand
+						object _leftResult = FieldOperationHelper.GetOperandValue(property, stepsResult, _leftOperand);
+						object _rightResult = FieldOperationHelper.GetOperandValue(property, stepsResult, _rightOperand);
+
+						double _ArithmeticExpressionResult = FieldOperationHelper.ArithmeticExpressionResult(_ArithmeticOperator, _leftResult, _rightResult);
+						stepsResult.Add(_ArithmeticExpressionResult);
+					}
+				}
+			}
+			catch (Exception _exception)
+			{
+				string _error = $"'EditCondition' attribute is invalid";
+				EditorGUI.LabelField(position, label.text, _error);
+				Debug.LogError(_exception);
+				return;
+			}
+		}
+
+		// Get final result
+		bool _canEdit = (bool)stepsResult[stepsResult.Count - 1];
+
+		// Apply
+		GUI.enabled = _canEdit;
+		EditorGUI.PropertyField(position, property, label, true);
+	}
+}
+
+public static class FieldOperationHelper
+{
 	static readonly Dictionary<string, BooleanOperator> BooleanOperatorMap = new(){
 		{ "!", BooleanOperator.Not },
 		{ "==", BooleanOperator.Equal },
@@ -337,106 +553,7 @@ public class HideConditionDrawer : PropertyDrawer
 		{ "/", ArithmeticOperator.Divide }
 	};
 
-	static readonly Dictionary<string, Type> EnumCache = new();
-
-	Rect position;
-	SerializedProperty property;
-	GUIContent label;
-	List<object> stepsResult;
-	bool canHide = false;
-
-	public override void OnGUI(Rect _position, SerializedProperty _property, GUIContent _label)
-	{
-		// Reset properties
-		position = _position;
-		property = _property;
-		label = _label;
-		stepsResult = new();
-
-		// Check expression
-		HideConditionAttribute _hideCondition = (HideConditionAttribute)attribute;
-		try
-		{
-			List<string> _stepsExpression = BooleanExpressionParser.ParseBooleanExpression(_hideCondition.booleanExpression);
-			for (int i = 0; i < _stepsExpression.Count; i++)
-			{
-				string _step = _stepsExpression[i];
-
-				if (BooleanExpressionParser.BooleanOperatorRegex.IsMatch(_step)) // Boolean expression
-				{
-					string[] _splitedOperation = BooleanExpressionParser.BooleanOperatorRegex.Split(_step);
-					// Always 3 item : 0{Left} 1{Operator} 2{Right}
-					string _leftOperand = _splitedOperation[0]; // Can be null
-					string _operator = _splitedOperation[1];
-					string _rightOperand = _splitedOperation[2];
-
-					// Boolean operator
-					BooleanOperator _booleanOperator = GetBooleanOperator(_operator);
-					if (_booleanOperator == BooleanOperator.None)
-					{
-						string _error = $"Failed to get boolean operator '{_operator}' for EditCondition of property field '{property.name}'";
-						EditorGUI.LabelField(position, label.text, $"{_error}");
-						Debug.LogError(_error);
-						return;
-					}
-
-					// Left/Right operand
-					object _leftResult = null;
-					if (!string.IsNullOrWhiteSpace(_leftOperand))
-						_leftResult = GetOperandValue(_leftOperand);
-					object _rightResult = GetOperandValue(_rightOperand);
-
-					bool _booleanExpressionResult = BooleanExpressionResult(_booleanOperator, _leftResult, _rightResult);
-					//DebugLog.Log("TEST", $"(Boolean) {_step} : Left: '{_leftResult}'; Right: '{_rightResult}' = {_booleanExpressionResult}");
-					stepsResult.Add(_booleanExpressionResult);
-				}
-				else // Arithmetic expression
-				{
-					MatchCollection _matches = BooleanExpressionParser.ArithmeticOperandRegex.Matches(_step);
-					// Always 3 item : 0{Left} 1{Operator} 2{Right}
-					string _leftOperand = _matches[0].Value;
-					string _operator = _matches[1].Value;
-					string _rightOperand = _matches[2].Value;
-
-					// Arithmetic operator
-					ArithmeticOperator _ArithmeticOperator = GetArithmeticOperator(_operator);
-					if (_ArithmeticOperator == ArithmeticOperator.None)
-					{
-						string _error = $"Failed to get Arithmetic operator '{_operator}' for EditCondition of property field '{property.name}'";
-						EditorGUI.LabelField(position, label.text, $"{_error}");
-						Debug.LogError(_error);
-						return;
-					}
-
-					// Left/Right operand
-					object _leftResult = GetOperandValue(_leftOperand);
-					object _rightResult = GetOperandValue(_rightOperand);
-
-					double _ArithmeticExpressionResult = ArithmeticExpressionResult(_ArithmeticOperator, _leftResult, _rightResult);
-					//DebugLog.Log("TEST", $"(Arithmetic) {_step} : Left: '{_leftResult}'; Right: '{_rightResult}' = {_ArithmeticExpressionResult}");
-					stepsResult.Add(_ArithmeticExpressionResult);
-				}
-			}
-		}
-		catch
-		{
-			string _error = $"'HideCondition' attribute is invalid";
-			EditorGUI.LabelField(position, label.text, _error);
-			throw;
-		}
-
-		// Get final result
-		canHide = (bool)stepsResult[stepsResult.Count - 1];
-		if (!canHide)
-			EditorGUI.PropertyField(position, property, label, true);
-	}
-
-	public override float GetPropertyHeight(SerializedProperty _property, GUIContent _label)
-	{
-		// Reduce property's height if hidden
-		return !canHide ? EditorGUI.GetPropertyHeight(_property, _label, true) : 0f;
-	}
-
+	static Dictionary<string, Type> EnumCache = new();
 
 	/// <summary>
 	/// Get operand's value by its type
@@ -444,7 +561,7 @@ public class HideConditionDrawer : PropertyDrawer
 	/// <param name="_operand"> The operand string </param>
 	/// <returns> The operand's value</returns>
 	/// <exception cref="Exception"> Error exception </exception>
-	object GetOperandValue(string _operand)
+	public static object GetOperandValue(SerializedProperty _property, List<object> _stepsResult, string _operand)
 	{
 		// Boolean value
 		if (BooleanExpressionParser.BooleanRegex.IsMatch(_operand))
@@ -464,7 +581,7 @@ public class HideConditionDrawer : PropertyDrawer
 		}
 
 		// Enum
-		if (_operand.Contains('.')) // Always after Digit because of point
+		if (_operand.Contains('.')) // Always after Digit because of point character
 		{
 			// Always 2 items: 0{EnumName} 1{EnumValue}
 			string[] _splitedEnum = _operand.Split('.');
@@ -486,345 +603,6 @@ public class HideConditionDrawer : PropertyDrawer
 			}
 			else
 			{
-				string _error = $"Enum value '{_enumName}.{_enumValue}' is undefined";
-				throw new Exception(_error);
-			}
-		}
-
-		//Previous result
-		if (_operand.StartsWith('#'))
-		{
-			string _resultIndex = _operand.TrimStart('#'); // Remove '#'
-			if (int.TryParse(_resultIndex, out int _index))
-			{
-				if (_index < 0 || _index >= stepsResult.Count)
-				{
-					string _error = $"Index out of bounds '{_index}'";
-					throw new Exception(_error);
-				}
-				return stepsResult[_index];
-			}
-			else
-			{
-				string _error = $"Failed to get previous result '{_operand}'";
-				throw new Exception(_error);
-			}
-		}
-
-		// Field value
-		SerializedProperty _property = GetObjectProperty(property, _operand);
-		if (_property == null)
-			throw new Exception($"Field property '{_operand}' not found");
-		return _property?.propertyType switch
-		{
-			SerializedPropertyType.Boolean => _property.boolValue,
-			SerializedPropertyType.Integer => _property.intValue,
-			SerializedPropertyType.Float => _property.floatValue,
-			SerializedPropertyType.Enum => _property.enumValueIndex,
-			_ => throw new Exception($"Unsupported property type for '{_operand}'")
-		};
-	}
-
-	/// <summary>
-	/// Get the type of an enum
-	/// </summary>
-	/// <param name="_enumName"> The enum's name </param>
-	/// <returns> The Type if find, false otherwise </returns>
-	Type GetEnumType(string _enumName)
-	{
-		// Search if enum cached
-		if (EnumCache.TryGetValue(_enumName, out var _type))
-			return _type;
-
-		// Search in the current assembly
-		_type = AppDomain.CurrentDomain.GetAssemblies()
-			.SelectMany(a => a.GetTypes())
-			.FirstOrDefault(t => t.IsEnum && t.FullName == _enumName);
-
-		// Cache enum
-		if (_type != null)
-			EnumCache[_enumName] = _type;
-
-		return _type;
-	}
-
-	/// <summary>
-	/// Get the result of a boolean expression
-	/// </summary>
-	/// <param name="_booleanOperator"> The boolean operator </param>
-	/// <param name="_left"> The left operand of expression, can bu null </param>
-	/// <param name="_right"> The right operand of expression </param>
-	/// <returns> The expression's result </returns>
-	bool BooleanExpressionResult(BooleanOperator _booleanOperator, object _left, object _right)
-	{
-		bool _result = false;
-		switch (_booleanOperator)
-		{
-			case BooleanOperator.Not:
-				_result = !Convert.ToBoolean(_right);
-				break;
-			case BooleanOperator.Equal:
-				_result = _left.Equals(_right);
-				break;
-			case BooleanOperator.NotEqual:
-				_result = !_left.Equals(_right);
-				break;
-			case BooleanOperator.Less:
-				_result = Convert.ToDouble(_left) < Convert.ToDouble(_right);
-				break;
-			case BooleanOperator.LessEqual:
-				_result = Convert.ToDouble(_left) <= Convert.ToDouble(_right);
-				break;
-			case BooleanOperator.Greater:
-				_result = Convert.ToDouble(_left) > Convert.ToDouble(_right);
-				break;
-			case BooleanOperator.GreaterEqual:
-				_result = Convert.ToDouble(_left) >= Convert.ToDouble(_right);
-				break;
-			case BooleanOperator.And:
-				_result = Convert.ToBoolean(_left) && Convert.ToBoolean(_right);
-				break;
-			case BooleanOperator.Or:
-				_result = Convert.ToBoolean(_left) || Convert.ToBoolean(_right);
-				break;
-			case BooleanOperator.Xor:
-				_result = Convert.ToBoolean(_left) ^ Convert.ToBoolean(_right);
-				break;
-		}
-
-		return _result;
-	}
-
-	/// <summary>
-	/// Get the result of an arithmetic expression
-	/// </summary>
-	/// <param name="_booleanOperator"> The arithmetic operator </param>
-	/// <param name="_left"> The left operand of expression </param>
-	/// <param name="_right"> The right operand of expression </param>
-	/// <returns> The expression's result </returns>
-	double ArithmeticExpressionResult(ArithmeticOperator _operator, object _left, object _right)
-	{
-		double _result = 0;
-		switch (_operator)
-		{
-			case ArithmeticOperator.Plus:
-				_result = Convert.ToDouble(_left) + Convert.ToDouble(_right);
-				break;
-			case ArithmeticOperator.Minus:
-				_result = Convert.ToDouble(_left) - Convert.ToDouble(_right);
-				break;
-			case ArithmeticOperator.Times:
-				_result = Convert.ToDouble(_left) * Convert.ToDouble(_right);
-				break;
-			case ArithmeticOperator.Divide:
-				_result = Convert.ToDouble(_left) / Convert.ToDouble(_right);
-				break;
-		}
-
-		return _result;
-	}
-
-	/// <summary>
-	/// Get the boolean operator's type
-	/// </summary>
-	/// <param name="_operator"> The operator in string </param>
-	/// <returns> The BooleanOperator type if find, None otherwise </returns>
-	BooleanOperator GetBooleanOperator(string _operator) => BooleanOperatorMap.TryGetValue(_operator, out var _result) ? _result : BooleanOperator.None;
-	/// <summary>
-	/// Get the arithmetic operator's type
-	/// </summary>
-	/// <param name="_operator"> The operator in string </param>
-	/// <returns> The ArithmeticOperator type if find, None otherwise </returns>
-	ArithmeticOperator GetArithmeticOperator(string _operator) => ArithmeticOperatorMap.TryGetValue(_operator, out var _result) ? _result : ArithmeticOperator.None;
-
-	/// <summary>
-	/// Get a serialized property on current serialized object
-	/// </summary>
-	/// <param name="_startedProperty"> The serialized property drawed </param>
-	/// <param name="_propertyName"> The property's name to get </param>
-	/// <returns> The SerializedProperty if find, null otherwise </returns>
-	SerializedProperty GetObjectProperty(SerializedProperty _startedProperty, string _propertyName)
-	{
-		string _targetPath = _startedProperty.propertyPath;
-		if (_targetPath.EndsWith(']')) // Don't use _property.isArray because it don't work with ScriptableObject, GameObject, MonoBehaviour, ...
-		{
-			// Replace path's last array field by condition field		
-			int _indexArrayField = _targetPath.LastIndexOf(".Array.data");
-			_targetPath = _targetPath.Substring(0, _indexArrayField);
-		}
-		// Replace path's last field by condition field
-		int _indexPropertyName = _targetPath.LastIndexOf('.') + 1;
-		_targetPath = _targetPath.Substring(0, _indexPropertyName) + _propertyName;
-		return _startedProperty.serializedObject.FindProperty(_targetPath);
-	}
-}
-
-[CustomPropertyDrawer(typeof(EditConditionAttribute))]
-public class EditConditionDrawer : PropertyDrawer
-{
-	static readonly Dictionary<string, BooleanOperator> BooleanOperatorMap = new(){
-		{ "!", BooleanOperator.Not },
-		{ "==", BooleanOperator.Equal },
-		{ "!=", BooleanOperator.NotEqual },
-		{ "<", BooleanOperator.Less },
-		{ "<=", BooleanOperator.LessEqual },
-		{ ">", BooleanOperator.Greater },
-		{ ">=", BooleanOperator.GreaterEqual },
-		{ "&&", BooleanOperator.And },
-		{ "||", BooleanOperator.Or },
-		{ "^", BooleanOperator.Xor }
-	};
-
-	static readonly Dictionary<string, ArithmeticOperator> ArithmeticOperatorMap = new(){
-		{ "+", ArithmeticOperator.Plus },
-		{ "-", ArithmeticOperator.Minus },
-		{ "*", ArithmeticOperator.Times },
-		{ "/", ArithmeticOperator.Divide }
-	};
-
-	static readonly Dictionary<string, Type> EnumCache = new();
-
-	Rect position;
-	SerializedProperty property;
-	GUIContent label;
-	List<object> stepsResult;
-
-	public override void OnGUI(Rect _position, SerializedProperty _property, GUIContent _label)
-	{
-		// Reset properties
-		position = _position;
-		property = _property;
-		label = _label;
-		stepsResult = new();
-
-		// Check expression
-		EditConditionAttribute _editCondition = (EditConditionAttribute)attribute;
-		try
-		{
-			List<string> _stepsExpression = BooleanExpressionParser.ParseBooleanExpression(_editCondition.booleanExpression);
-			for (int i = 0; i < _stepsExpression.Count; i++)
-			{
-				string _step = _stepsExpression[i];
-
-				if (BooleanExpressionParser.BooleanOperatorRegex.IsMatch(_step)) // Boolean expression
-				{
-					string[] _splitedOperation = BooleanExpressionParser.BooleanOperatorRegex.Split(_step);
-					// Always 3 item : 0{Left} 1{Operator} 2{Right}
-					string _leftOperand = _splitedOperation[0]; // Can be null
-					string _operator = _splitedOperation[1];
-					string _rightOperand = _splitedOperation[2];
-
-					// Boolean operator
-					BooleanOperator _booleanOperator = GetBooleanOperator(_operator);
-					if (_booleanOperator == BooleanOperator.None)
-					{
-						string _error = $"Failed to get boolean operator '{_operator}' for EditCondition of property field '{property.name}'";
-						EditorGUI.LabelField(position, label.text, $"{_error}");
-						Debug.LogError(_error);
-						return;
-					}
-
-					// Left/Right operand
-					object _leftResult = null;
-					if (!string.IsNullOrWhiteSpace(_leftOperand))
-						_leftResult = GetOperandValue(_leftOperand);
-					object _rightResult = GetOperandValue(_rightOperand);
-
-					bool _booleanExpressionResult = BooleanExpressionResult(_booleanOperator, _leftResult, _rightResult);
-					//DebugLog.Log("TEST", $"(Boolean) {_step} : Left: '{_leftResult}'; Right: '{_rightResult}' = {_booleanExpressionResult}");
-					stepsResult.Add(_booleanExpressionResult);
-				}
-				else // Arithmetic expression
-				{
-					MatchCollection _matches = BooleanExpressionParser.ArithmeticOperandRegex.Matches(_step);
-					// Always 3 item : 0{Left} 1{Operator} 2{Right}
-					string _leftOperand = _matches[0].Value;
-					string _operator = _matches[1].Value;
-					string _rightOperand = _matches[2].Value;
-
-					// Arithmetic operator
-					ArithmeticOperator _ArithmeticOperator = GetArithmeticOperator(_operator);
-					if (_ArithmeticOperator == ArithmeticOperator.None)
-					{
-						string _error = $"Failed to get Arithmetic operator '{_operator}' for EditCondition of property field '{property.name}'";
-						EditorGUI.LabelField(position, label.text, $"{_error}");
-						Debug.LogError(_error);
-						return;
-					}
-
-					// Left/Right operand
-					object _leftResult = GetOperandValue(_leftOperand);
-					object _rightResult = GetOperandValue(_rightOperand);
-
-					double _ArithmeticExpressionResult = ArithmeticExpressionResult(_ArithmeticOperator, _leftResult, _rightResult);
-					//DebugLog.Log("TEST", $"(Arithmetic) {_step} : Left: '{_leftResult}'; Right: '{_rightResult}' = {_ArithmeticExpressionResult}");
-					stepsResult.Add(_ArithmeticExpressionResult);
-				}
-			}
-		}
-		catch
-		{
-			string _error = $"'EditCondition' attribute is invalid";
-			EditorGUI.LabelField(position, label.text, _error);
-			throw;
-		}
-
-		// Get final result
-		bool _canEdit = (bool)stepsResult[stepsResult.Count - 1];
-
-		// Apply
-		GUI.enabled = _canEdit;
-		EditorGUI.PropertyField(position, property, label, true);
-	}
-
-	/// <summary>
-	/// Get operand's value by its type
-	/// </summary>
-	/// <param name="_operand"> The operand string </param>
-	/// <returns> The operand's value</returns>
-	/// <exception cref="Exception"> Error exception </exception>
-	object GetOperandValue(string _operand)
-	{
-		// Boolean value
-		if (BooleanExpressionParser.BooleanRegex.IsMatch(_operand))
-			return Convert.ToBoolean(_operand);
-
-		// Digit
-		if (BooleanExpressionParser.DigitRegex.IsMatch(_operand))
-		{
-			string _digit = _operand.TrimEnd('f', 'F'); // Remove float mark
-			if (float.TryParse(_digit, NumberStyles.Float, CultureInfo.InvariantCulture, out float _value))
-				return _value;
-			else
-			{
-				string _error = $"Digit operand '{_operand}' isn't supported";
-				throw new Exception(_error);
-			}
-		}
-
-		// Enum
-		if (_operand.Contains('.')) // Always after Digit because of point
-		{
-			// Always 2 items: 0{EnumName} 1{EnumValue}
-			string[] _splitedEnum = _operand.Split('.');
-			string _enumName = _splitedEnum[0];
-			string _enumValue = _splitedEnum[1];
-
-			Type _enumType = GetEnumType(_enumName);
-			if (_enumType == null)
-				throw new Exception($"Enum '{_enumName}' not found");
-			if (_enumType.IsEnumDefined(_enumValue))
-			{
-				if (Enum.TryParse(_enumType, _enumValue, out object _value))
-					return (int)_value;
-				else
-				{
-					string _error = $"Failed to get enum value '{_enumValue}'";
-					throw new Exception(_error);
-				}
-			}
-			else
-			{
 				string _error = $"Enum value '{_enumValue}' is undefined";
 				throw new Exception(_error);
 			}
@@ -836,12 +614,12 @@ public class EditConditionDrawer : PropertyDrawer
 			string _resultIndex = _operand.TrimStart('#'); // Remove '#'
 			if (int.TryParse(_resultIndex, out int _index))
 			{
-				if (_index < 0 || _index >= stepsResult.Count)
+				if (_index < 0 || _index >= _stepsResult.Count)
 				{
 					string _error = $"Index out of bounds '{_index}'";
 					throw new Exception(_error);
 				}
-				return stepsResult[_index];
+				return _stepsResult[_index];
 			}
 			else
 			{
@@ -851,15 +629,15 @@ public class EditConditionDrawer : PropertyDrawer
 		}
 
 		// Field value
-		SerializedProperty _property = GetObjectProperty(property, _operand);
-		if (_property == null)
+		SerializedProperty _wantedProperty = GetObjectProperty(_property, _operand);
+		if (_wantedProperty == null)
 			throw new Exception($"Field property '{_operand}' not found");
-		return _property?.propertyType switch
+		return _wantedProperty?.propertyType switch
 		{
-			SerializedPropertyType.Boolean => _property.boolValue,
-			SerializedPropertyType.Integer => _property.intValue,
-			SerializedPropertyType.Float => _property.floatValue,
-			SerializedPropertyType.Enum => _property.enumValueIndex,
+			SerializedPropertyType.Boolean => _wantedProperty.boolValue,
+			SerializedPropertyType.Integer => _wantedProperty.intValue,
+			SerializedPropertyType.Float => _wantedProperty.floatValue,
+			SerializedPropertyType.Enum => _wantedProperty.enumValueIndex,
 			_ => throw new Exception($"Unsupported property type for '{_operand}'")
 		};
 	}
@@ -867,22 +645,29 @@ public class EditConditionDrawer : PropertyDrawer
 	/// <summary>
 	/// Get the type of an enum
 	/// </summary>
-	/// <param name="enumName"> The enum's name </param>
+	/// <param name="_enumName"> The enum's name </param>
 	/// <returns> The Type if find, false otherwise </returns>
-	Type GetEnumType(string enumName)
+	public static Type GetEnumType(string _enumName)
 	{
-		if (EnumCache.TryGetValue(enumName, out var type))
-			return type;
+		// Try if already cached enum
+		if (EnumCache.TryGetValue(_enumName, out Type _type))
+			return _type;
 
-		// Search in all types of the current assembly
-		type = AppDomain.CurrentDomain.GetAssemblies()
-			.SelectMany(a => a.GetTypes())
-			.FirstOrDefault(t => t.IsEnum && t.Name == enumName);
+		// Get Type in Assembly-CSharp
+		try
+		{
+			Assembly _Assembly_CSharp = Assembly.Load("Assembly-CSharp");
+			_type = _Assembly_CSharp.GetType(_enumName, true, true);
 
-		if (type != null)
-			EnumCache[enumName] = type;
+			if (_type != null)
+				EnumCache[_enumName] = _type;
+		}
+		catch
+		{
+			throw;
+		}
 
-		return type;
+		return _type;
 	}
 
 	/// <summary>
@@ -892,7 +677,7 @@ public class EditConditionDrawer : PropertyDrawer
 	/// <param name="_left"> The left operand of expression, can bu null </param>
 	/// <param name="_right"> The right operand of expression </param>
 	/// <returns> The expression's result </returns>
-	bool BooleanExpressionResult(BooleanOperator _booleanOperator, object _left, object _right)
+	public static bool BooleanExpressionResult(BooleanOperator _booleanOperator, object _left, object _right)
 	{
 		bool _result = false;
 		switch (_booleanOperator)
@@ -939,7 +724,7 @@ public class EditConditionDrawer : PropertyDrawer
 	/// <param name="_left"> The left operand of expression </param>
 	/// <param name="_right"> The right operand of expression </param>
 	/// <returns> The expression's result </returns>
-	double ArithmeticExpressionResult(ArithmeticOperator _operator, object _left, object _right)
+	public static double ArithmeticExpressionResult(ArithmeticOperator _operator, object _left, object _right)
 	{
 		double _result = 0;
 		switch (_operator)
@@ -966,13 +751,13 @@ public class EditConditionDrawer : PropertyDrawer
 	/// </summary>
 	/// <param name="_operator"> The operator in string </param>
 	/// <returns> The BooleanOperator type if find, None otherwise </returns>
-	BooleanOperator GetBooleanOperator(string _operator) => BooleanOperatorMap.TryGetValue(_operator, out var _result) ? _result : BooleanOperator.None;
+	public static BooleanOperator GetBooleanOperator(string _operator) => BooleanOperatorMap.TryGetValue(_operator, out var _result) ? _result : BooleanOperator.None;
 	/// <summary>
 	/// Get the arithmetic operator's type
 	/// </summary>
 	/// <param name="_operator"> The operator in string </param>
 	/// <returns> The ArithmeticOperator type if find, None otherwise </returns>
-	ArithmeticOperator GetArithmeticOperator(string _operator) => ArithmeticOperatorMap.TryGetValue(_operator, out var _result) ? _result : ArithmeticOperator.None;
+	public static ArithmeticOperator GetArithmeticOperator(string _operator) => ArithmeticOperatorMap.TryGetValue(_operator, out var _result) ? _result : ArithmeticOperator.None;
 
 	/// <summary>
 	/// Get a serialized property on current serialized object
@@ -980,12 +765,12 @@ public class EditConditionDrawer : PropertyDrawer
 	/// <param name="_startedProperty"> The serialized property drawed </param>
 	/// <param name="_propertyName"> The property's name to get </param>
 	/// <returns> The SerializedProperty if find, null otherwise </returns>
-	SerializedProperty GetObjectProperty(SerializedProperty _startedProperty, string _propertyName)
+	public static SerializedProperty GetObjectProperty(SerializedProperty _startedProperty, string _propertyName)
 	{
 		string _targetPath = _startedProperty.propertyPath;
 		if (_targetPath.EndsWith(']')) // Don't use _property.isArray because it don't work with ScriptableObject, GameObject, MonoBehaviour, ...
 		{
-			// Replace path's last array field by condition field		
+			// Replace path's last array field by condition field
 			int _indexArrayField = _targetPath.LastIndexOf(".Array.data");
 			_targetPath = _targetPath.Substring(0, _indexArrayField);
 		}
@@ -996,7 +781,7 @@ public class EditConditionDrawer : PropertyDrawer
 	}
 }
 
-enum BooleanOperator
+public enum BooleanOperator
 {
 	None,
 	Not,
@@ -1010,7 +795,7 @@ enum BooleanOperator
 	Or,
 	Xor
 }
-enum ArithmeticOperator
+public enum ArithmeticOperator
 {
 	None,
 	Plus,
